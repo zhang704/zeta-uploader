@@ -30,16 +30,41 @@ const columns = [
 class App extends React.Component {
   constructor(props) {
     super(props);
-    this.container = {
-      file: null
-    }
     this.requestList = []
     this.state = {
+      container: {
+        file: null
+      },
       data: [],
       requestList: [],
       hashPercentage: 0,
-      fakeUploadPercentage: 0
+      fakeUploadPercentage: 0,
+      drag: false
     }
+  }
+  componentDidMount = () => {
+    // 移动拖着不放事件
+    document.getElementsByClassName("drag")[0].addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!this.state.drag) {
+        this.setState({ drag: true });
+      }
+    });
+    // 移动拖着放下事件
+    document.getElementsByClassName("drag")[0].addEventListener("drop", (e) => {
+      e.preventDefault();
+      if (this.state.drag) {
+        this.setState({ drag: false });
+      }
+      const { files } = e.dataTransfer;
+      this.handleFileChange({ target: { files } })
+    });
+    document.addEventListener("dragover", (e) => {
+      if (this.state.drag) {
+        this.setState({ drag: false });
+      }
+    });
   }
   componentDidUpdate = () => {
     const now = this.uploadPercentage();
@@ -47,34 +72,42 @@ class App extends React.Component {
       this.setState({ fakeUploadPercentage: now });
     }
   }
+  handleUploadFile = () => {
+    const fileInput = document.getElementById("input");
+    fileInput.click();
+  }
   uploadPercentage = () => {
-    if (!this.container.file || !this.state.data.length) return 0;
+    if (!this.state.container.file || !this.state.data.length) return 0;
     const loaded = this.state.data
       .map(item => item.size * item.percentage)
       .reduce((acc, cur) => acc + cur);
-    return parseInt((loaded / this.container.file.size).toFixed(2));
+    return parseInt((loaded / this.state.container.file.size).toFixed(2));
   }
   handleFileChange = (e) => {
     const [file] = e.target.files;
     if (!file) return;
-    this.container.file = file;
+    this.setState({ container: { file } });
   }
   handleUpload = async () => {
-    if (!this.container.file) return;
-    const fileChunkList = this.createFileChunk(this.container.file);
-    this.container.hash = await this.calculateHash(fileChunkList);
+    if (!this.state.container.file) return;
+    const fileChunkList = this.createFileChunk(this.state.container.file);
+    const hash = await this.calculateHash(fileChunkList);
+    this.setState(({ container }) => {
+      container.hash = hash;
+      return { container };
+    })
     const { shouldUpload, uploadedList } = await this.verifyUpload(
-      this.container.file.name,
-      this.container.hash
+      this.state.container.file.name,
+      this.state.container.hash
     );
     if (!shouldUpload) {
       message.success("秒传：上传成功");
       return;
     }
     const data = fileChunkList.map(({ file }, index) => ({
-      fileHash: this.container.hash,
+      fileHash: this.state.container.hash,
       index,
-      hash: this.container.hash + "-" + index,
+      hash: this.state.container.hash + "-" + index,
       chunk: file,
       size: file.size,
       percentage: uploadedList.includes(index) ? 100 : 0
@@ -101,15 +134,18 @@ class App extends React.Component {
   // 生成文件 hash（web-worker）
   calculateHash = (fileChunkList) => {
     return new Promise(resolve => {
-      this.container.worker = new Worker("/hash.js");
-      this.container.worker.postMessage({ fileChunkList });
-      this.container.worker.onmessage = e => {
-        const { percentage, hash } = e.data;
-        this.setState({ hashPercentage: percentage });
-        if (hash) {
-          resolve(hash);
-        }
-      };
+      this.setState(({ container }) => {
+        container.worker = new Worker("/hash.js");
+        container.worker.postMessage({ fileChunkList });
+        container.worker.onmessage = e => {
+          const { percentage, hash } = e.data;
+          this.setState({ hashPercentage: percentage });
+          if (hash) {
+            resolve(hash);
+          }
+        };
+        return { container };
+      })
     });
   }
   // 控制每次发起的请求量
@@ -153,8 +189,8 @@ class App extends React.Component {
         const formData = new FormData();
         formData.append("chunk", chunk);
         formData.append("hash", hash);
-        formData.append("filename", this.container.file.name);
-        formData.append("fileHash", this.container.hash);
+        formData.append("filename", this.state.container.file.name);
+        formData.append("fileHash", this.state.container.hash);
         return { formData, index };
       })
     //   .map(async ({ formData, index }) =>
@@ -185,8 +221,8 @@ class App extends React.Component {
       },
       data: JSON.stringify({
         size: SIZE,
-        fileHash: this.container.hash,
-        filename: this.container.file.name
+        fileHash: this.state.container.hash,
+        filename: this.state.container.file.name
       })
     });
   }
@@ -227,11 +263,14 @@ class App extends React.Component {
     };
   }
   render() {
-    const { data, hashPercentage, fakeUploadPercentage } = this.state;
+    const { data, hashPercentage, fakeUploadPercentage, drag, container } = this.state;
     return (
       <div className="App">
         <Space>
-          <input type="file" onChange={this.handleFileChange} />
+          <div className={`drag ${drag ? 'drag-container' : ''}`} onClick={this.handleUploadFile}>
+            <input id="input" className="input" type="file" onChange={this.handleFileChange} />
+            {container.file ? <span className="content">{container.file.name}</span> : <span className="placeholder">拖拽到此处</span>}
+          </div>
           <Button type="primary" onClick={this.handleUpload}>上传</Button>
         </Space>
         <div>

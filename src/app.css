@@ -5,3 +5,30 @@ body {
   margin: 0;
   padding: 10px;
 }
+
+.drag {
+  border: 1px dashed #999999;
+  width: 400px;
+  height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  cursor: pointer;
+}
+
+.drag-container {
+  border-color: #1890ff;
+}
+
+.placeholder {
+  color: #999999;
+}
+
+.content {
+  color: #333333;
+}
+
+.input {
+  display: none;
+}
