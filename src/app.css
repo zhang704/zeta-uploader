@@ -15,6 +15,7 @@ body {
   justify-content: center;
   position: relative;
   cursor: pointer;
+  margin-bottom: 10px;
 }
 
 .drag-container {
@@ -29,6 +30,6 @@ body {
   color: #333333;
 }
 
-.input {
+.drag .input {
   display: none;
 }

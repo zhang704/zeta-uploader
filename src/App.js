@@ -2,6 +2,11 @@ import React from 'react';
 import { Button, message, Progress, Table, Space } from 'antd';
 import './app.css';
 const SIZE = 10 * 1024 * 1024; // 切片大小
+const Status = {
+  wait: "wait",
+  pause: "pause",
+  uploading: "uploading"
+};
 const columns = [
   {
     title: '切片hash',
@@ -30,7 +35,6 @@ const columns = [
 class App extends React.Component {
   constructor(props) {
     super(props);
-    this.requestList = []
     this.state = {
       container: {
         file: null
@@ -39,38 +43,63 @@ class App extends React.Component {
       requestList: [],
       hashPercentage: 0,
       fakeUploadPercentage: 0,
-      drag: false
+      drag: false,
+      status: Status.wait,
     }
   }
   componentDidMount = () => {
-    // 移动拖着不放事件
-    document.getElementsByClassName("drag")[0].addEventListener("dragover", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!this.state.drag) {
-        this.setState({ drag: true });
-      }
-    });
-    // 移动拖着放下事件
-    document.getElementsByClassName("drag")[0].addEventListener("drop", (e) => {
-      e.preventDefault();
-      if (this.state.drag) {
-        this.setState({ drag: false });
-      }
-      const { files } = e.dataTransfer;
-      this.handleFileChange({ target: { files } })
-    });
-    document.addEventListener("dragover", (e) => {
-      if (this.state.drag) {
-        this.setState({ drag: false });
-      }
-    });
+    const dragElement = document.getElementsByClassName("drag")[0];
+    if (dragElement) {
+      // 移动拖着不放事件
+      dragElement.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!this.state.drag) {
+          this.setState({ drag: true });
+        }
+      });
+      // 移动拖着放下事件
+      dragElement.addEventListener("drop", (e) => {
+        e.preventDefault();
+        if (this.state.drag) {
+          this.setState({ drag: false });
+        }
+        const { files } = e.dataTransfer;
+        this.handleFileChange({ target: { files } })
+      });
+      document.addEventListener("dragover", (e) => {
+        if (this.state.drag) {
+          this.setState({ drag: false });
+        }
+      });
+    }
   }
   componentDidUpdate = () => {
     const now = this.uploadPercentage();
     if (now !== this.state.fakeUploadPercentage) {
       this.setState({ fakeUploadPercentage: now });
     }
+  }
+  handlePause = () => {
+    this.setState({ status: Status.pause });
+    this.resetData();
+  }
+  handleResume = async () => {
+    this.setState({ status: Status.uploading });
+    const { uploadedList } = await this.verifyUpload(
+      this.state.container.file.name,
+      this.state.container.hash
+    );
+    await this.uploadChunks(uploadedList);
+  }
+  resetData = () => {
+    let { requestList, container } = this.state;
+    requestList.forEach(xhr => xhr?.abort());
+    requestList = [];
+    if (container.worker) {
+      container.worker.onmessage = null;
+    }
+    this.setState({ requestList, container });
   }
   handleUploadFile = () => {
     const fileInput = document.getElementById("input");
@@ -86,10 +115,12 @@ class App extends React.Component {
   handleFileChange = (e) => {
     const [file] = e.target.files;
     if (!file) return;
+    this.resetData();
     this.setState({ container: { file } });
   }
   handleUpload = async () => {
     if (!this.state.container.file) return;
+    this.setState({ status: Status.uploading });
     const fileChunkList = this.createFileChunk(this.state.container.file);
     const hash = await this.calculateHash(fileChunkList);
     this.setState(({ container }) => {
@@ -102,12 +133,13 @@ class App extends React.Component {
     );
     if (!shouldUpload) {
       message.success("秒传：上传成功");
+      this.setState({ status: Status.wait });
       return;
     }
     const data = fileChunkList.map(({ file }, index) => ({
       fileHash: this.state.container.hash,
       index,
-      hash: this.state.container.hash + "-" + index,
+      hash: `${this.state.container.hash}-${index}`,
       chunk: file,
       size: file.size,
       percentage: uploadedList.includes(index) ? 100 : 0
@@ -158,7 +190,6 @@ class App extends React.Component {
         // 有请求，有通道
         while (idx < len && max > 0) {
           max--; // 占用通道
-          console.log(idx, "start");
           const formData = forms[idx].formData;
           const index = forms[idx].index;
           idx++
@@ -167,7 +198,7 @@ class App extends React.Component {
             url: "http://localhost:3001",
             data: formData,
             onProgress: this.createProgressHandler(this.state.data[index]),
-            requestList: this.requestList
+            requestList: this.state.requestList
           }).then(() => {
             max++; // 释放通道
             counter++;
@@ -225,6 +256,8 @@ class App extends React.Component {
         filename: this.state.container.file.name
       })
     });
+    message.success("上传成功");
+    this.setState({ status: Status.wait });
   }
   // 生成文件切片
   createFileChunk = (file, size = SIZE) => {
@@ -246,10 +279,19 @@ class App extends React.Component {
       );
       xhr.send(data);
       xhr.onload = e => {
+        // 将请求成功的 xhr 从列表中删除
+        if (requestList) {
+          const xhrIndex = requestList.findIndex(item => item === xhr);
+          requestList.splice(xhrIndex, 1);
+        }
         resolve({
           data: e.target.response
         });
       };
+      if (requestList && requestList.push) {
+        requestList.push(xhr);
+        this.setState({ requestList: requestList });
+      }
     });
   }
   // 用闭包保存每个 chunk 的进度数据
@@ -263,7 +305,7 @@ class App extends React.Component {
     };
   }
   render() {
-    const { data, hashPercentage, fakeUploadPercentage, drag, container } = this.state;
+    const { data, hashPercentage, fakeUploadPercentage, drag, container, status } = this.state;
     return (
       <div className="App">
         <Space>
@@ -272,6 +314,9 @@ class App extends React.Component {
             {container.file ? <span className="content">{container.file.name}</span> : <span className="placeholder">拖拽到此处</span>}
           </div>
           <Button type="primary" onClick={this.handleUpload}>上传</Button>
+          {status === Status.pause ? (
+            <Button onClick={this.handleResume}>恢复</Button>
+          ) : <Button onClick={this.handlePause} disabled={(status !== Status.uploading) || !container.hash}>暂停</Button>}
         </Space>
         <div>
           <div>计算文件 hash</div>
